@@ -1,8 +1,8 @@
 (function (global, factory) {
-	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports) :
-	typeof define === 'function' && define.amd ? define(['exports'], factory) :
-	(factory((global.echarts = {})));
-}(this, (function (exports) { 'use strict';
+	typeof exports === 'object' && typeof module !== 'undefined' ? factory(exports, require('zrender/src/tool/parseSVG')) :
+	typeof define === 'function' && define.amd ? define(['exports', 'zrender/src/tool/parseSVG'], factory) :
+	(factory((global.echarts = {}),global.parseSVG));
+}(this, (function (exports,parseSVG) { 'use strict';
 
 /*
 * Licensed to the Apache Software Foundation (ASF) under one
@@ -17944,6 +17944,50 @@ function nice(val, round) {
 }
 
 /**
+ * BSD 3-Clause
+ *
+ * Copyright (c) 2010-2015, Michael Bostock
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * * Redistributions of source code must retain the above copyright notice, this
+ *   list of conditions and the following disclaimer.
+ *
+ * * Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ *
+ * * The name Michael Bostock may not be used to endorse or promote products
+ *   derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL MICHAEL BOSTOCK BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+ * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/**
+ * @see <https://github.com/mbostock/d3/blob/master/src/arrays/quantile.js>
+ * @see <http://en.wikipedia.org/wiki/Quantile>
+ * @param {Array.<number>} ascArr
+ */
+function quantile(ascArr, p) {
+    var H = (ascArr.length - 1) * p + 1;
+    var h = Math.floor(H);
+    var v = +ascArr[h - 1];
+    var e = H - h;
+    return e ? v + e * (ascArr[h] - v) : v;
+}
+
+/**
  * Order intervals asc, and split them when overlap.
  * expect(numberUtil.reformIntervals([
  *     {interval: [18, 62], close: [1, 1]},
@@ -18035,6 +18079,7 @@ var number = (Object.freeze || Object)({
 	parseDate: parseDate,
 	quantity: quantity,
 	nice: nice,
+	quantile: quantile,
 	reformIntervals: reformIntervals,
 	isNumeric: isNumeric
 });
@@ -25087,6 +25132,106 @@ Component.extend({
 * specific language governing permissions and limitations
 * under the License.
 */
+
+var storage = createHashMap();
+
+// For minimize the code size of common echarts package,
+// do not put too much logic in this module.
+
+var mapDataStorage = {
+
+    // The format of record: see `echarts.registerMap`.
+    // Compatible with previous `echarts.registerMap`.
+    registerMap: function (mapName, rawGeoJson, rawSpecialAreas) {
+
+        var records;
+
+        if (isArray(rawGeoJson)) {
+            records = rawGeoJson;
+        }
+        else if (rawGeoJson.svg) {
+            records = [{
+                type: 'svg',
+                source: rawGeoJson.svg,
+                specialAreas: rawGeoJson.specialAreas
+            }];
+        }
+        else {
+            // Backward compatibility.
+            if (rawGeoJson.geoJson && !rawGeoJson.features) {
+                rawSpecialAreas = rawGeoJson.specialAreas;
+                rawGeoJson = rawGeoJson.geoJson;
+            }
+            records = [{
+                type: 'geoJSON',
+                source: rawGeoJson,
+                specialAreas: rawSpecialAreas
+            }];
+        }
+
+        each$1(records, function (record) {
+            var type = record.type;
+            type === 'geoJson' && (type = record.type = 'geoJSON');
+
+            var parse = parsers[type];
+
+            if (__DEV__) {
+                assert$1(parse, 'Illegal map type: ' + type);
+            }
+
+            parse(record);
+        });
+
+        return storage.set(mapName, records);
+    },
+
+    retrieveMap: function (mapName) {
+        return storage.get(mapName);
+    }
+
+};
+
+var parsers = {
+
+    geoJSON: function (record) {
+        var source = record.source;
+        record.geoJSON = !isString(source)
+            ? source
+            : (typeof JSON !== 'undefined' && JSON.parse)
+            ? JSON.parse(source)
+            : (new Function('return (' + source + ');'))();
+    },
+
+    // Only perform parse to XML object here, which might be time
+    // consiming for large SVG.
+    // Although convert XML to zrender element is also time consiming,
+    // if we do it here, the clone of zrender elements has to be
+    // required. So we do it once for each geo instance, util real
+    // performance issues call for optimizing it.
+    svg: function (record) {
+        record.svgXML = parseSVG.parseXML(record.source);
+    }
+
+};
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
 var assert = assert$1;
 var each = each$1;
 var isFunction = isFunction$1;
@@ -26763,8 +26908,6 @@ var idBase = new Date() - 0;
 var groupIdBase = new Date() - 0;
 var DOM_ATTRIBUTE_KEY = '_echarts_instance_';
 
-var mapDataStores = {};
-
 function enableConnect(chart) {
     var STATUS_PENDING = 0;
     var STATUS_UPDATING = 1;
@@ -27158,10 +27301,10 @@ function setCanvasCreator(creator) {
 
 /**
  * @param {string} mapName
- * @param {Object|string} geoJson
+ * @param {Array.<Object>|Object|string} geoJson
  * @param {Object} [specialAreas]
  *
- * @example
+ * @example GeoJSON
  *     $.get('USA.json', function (geoJson) {
  *         echarts.registerMap('USA', geoJson);
  *         // Or
@@ -27170,20 +27313,20 @@ function setCanvasCreator(creator) {
  *             specialAreas: {}
  *         })
  *     });
+ *
+ *     $.get('airport.svg', function (svg) {
+ *         echarts.registerMap('airport', {
+ *             svg: svg
+ *         }
+ *     });
+ *
+ *     echarts.registerMap('eu', [
+ *         {svg: eu-topographic.svg},
+ *         {geoJSON: eu.json}
+ *     ])
  */
 function registerMap(mapName, geoJson, specialAreas) {
-    if (geoJson.geoJson && !geoJson.features) {
-        specialAreas = geoJson.specialAreas;
-        geoJson = geoJson.geoJson;
-    }
-    if (typeof geoJson === 'string') {
-        geoJson = (typeof JSON !== 'undefined' && JSON.parse)
-            ? JSON.parse(geoJson) : (new Function('return (' + geoJson + ');'))();
-    }
-    mapDataStores[mapName] = {
-        geoJson: geoJson,
-        specialAreas: specialAreas
-    };
+    mapDataStorage.registerMap(mapName, geoJson, specialAreas);
 }
 
 /**
@@ -27191,7 +27334,12 @@ function registerMap(mapName, geoJson, specialAreas) {
  * @return {Object}
  */
 function getMap(mapName) {
-    return mapDataStores[mapName];
+    // For backward compatibility, only return the first one.
+    var records = mapDataStorage.retrieveMap(mapName);
+    return records && records[0] && {
+        geoJson: records[0].geoJSON,
+        specialAreas: records[0].specialAreas
+    };
 }
 
 registerVisual(PRIORITY_VISUAL_GLOBAL, seriesColor);
@@ -31377,8 +31525,8 @@ var scaleLevels = [
     ['month', ONE_DAY * 31],           // 1M
     ['week', ONE_DAY * 42],            // 6w
     ['month', ONE_DAY * 62],           // 2M
-    ['week', ONE_DAY * 42],            // 10w
-    ['quarter', ONE_DAY * 380 / 4],    // 3M
+    ['week', ONE_DAY * 70],            // 10w
+    ['quarter', ONE_DAY * 95],         // 3M
     ['month', ONE_DAY * 31 * 4],       // 4M
     ['month', ONE_DAY * 31 * 5],       // 5M
     ['half-year', ONE_DAY * 380 / 2],  // 6M
@@ -31870,6 +32018,9 @@ function makeLabelFormatter(axis) {
     if (typeof labelFormatter === 'string') {
         labelFormatter = (function (tpl) {
             return function (val) {
+                // For category axis, get raw value; for numeric axis,
+                // get foramtted label like '1,333,444'.
+                val = axis.scale.getLabel(val);
                 return tpl.replace('{value}', val != null ? val : '');
             };
         })(labelFormatter);
@@ -32564,7 +32715,7 @@ function contain$1(points, x, y) {
  */
 
 /**
- * @param {string} name
+ * @param {string|Region} name
  * @param {Array} geometries
  * @param {Array.<number>} cp
  */
@@ -32705,6 +32856,14 @@ Region.prototype = {
             rect.x + rect.width / 2,
             rect.y + rect.height / 2
         ];
+    },
+
+    cloneShallow: function (name) {
+        name == null && (name = this.name);
+        var newRegion = new Region(name, this.geometries, this.center);
+        newRegion._rect = this._rect;
+        newRegion.transformTo = null; // Simply avoid to be called.
+        return newRegion;
     }
 };
 
@@ -43036,9 +43195,9 @@ for (var i$1 = 0; i$1 < points$1.length; i$1++) {
     }
 }
 
-var fixNanhai = function (geo) {
-    if (geo.map === 'china') {
-        geo.regions.push(new Region(
+var fixNanhai = function (mapType, regions) {
+    if (mapType === 'china') {
+        regions.push(new Region(
             '南海诸岛',
             map(points$1, function (exterior) {
                 return {
@@ -43079,15 +43238,15 @@ var coordsOffsetMap = {
     '天津': [5, 5]
 };
 
-var fixTextCoord = function (geo) {
-    each$1(geo.regions, function (region) {
+var fixTextCoord = function (mapType, region) {
+    if (mapType === 'china') {
         var coordFix = coordsOffsetMap[region.name];
         if (coordFix) {
             var cp = region.center;
             cp[0] += coordFix[0] / 10.5;
             cp[1] += -coordFix[1] / (10.5 / 0.75);
         }
-    });
+    }
 };
 
 /*
@@ -43115,15 +43274,15 @@ var geoCoordMap = {
     'United States of America': [-99, 38]
 };
 
-var fixGeoCoord = function (geo) {
-    each$1(geo.regions, function (region) {
+var fixGeoCoord = function (mapType, region) {
+    if (mapType === 'world') {
         var geoCoord = geoCoordMap[region.name];
         if (geoCoord) {
             var cp = region.center;
             cp[0] = geoCoord[0];
             cp[1] = geoCoord[1];
         }
-    });
+    }
 };
 
 /*
@@ -43162,16 +43321,12 @@ var points$2 = [
     ]
 ];
 
-var fixDiaoyuIsland = function (geo) {
-    if (geo.map === 'china') {
-        for (var i = 0, len = geo.regions.length; i < len; ++i) {
-            if (geo.regions[i].name === '台湾') {
-                geo.regions[i].geometries.push({
-                    type: 'polygon',
-                    exterior: points$2[0]
-                });
-            }
-        }
+var fixDiaoyuIsland = function (mapType, region) {
+    if (mapType === 'china' && region.name === '台湾') {
+        region.geometries.push({
+            type: 'polygon',
+            exterior: points$2[0]
+        });
     }
 };
 
@@ -43194,25 +43349,359 @@ var fixDiaoyuIsland = function (geo) {
 * under the License.
 */
 
-// Geo fix functions
-var geoFixFuncs = [
-    fixNanhai,
-    fixTextCoord,
-    fixGeoCoord,
-    fixDiaoyuIsland
-];
+// Built-in GEO fixer.
+var inner$7 = makeInner();
+
+var geoJSONLoader = {
+
+    /**
+     * @param {string} mapName
+     * @param {Object} mapRecord {specialAreas, geoJSON}
+     * @return {Object} {regions, boundingRect}
+     */
+    load: function (mapName, mapRecord) {
+
+        var parsed = inner$7(mapRecord).parsed;
+
+        if (parsed) {
+            return parsed;
+        }
+
+        var specialAreas = mapRecord.specialAreas || {};
+        var geoJSON = mapRecord.geoJSON;
+        var regions;
+
+        // https://jsperf.com/try-catch-performance-overhead
+        try {
+            regions = geoJSON ? parseGeoJson$1(geoJSON) : [];
+        }
+        catch (e) {
+            throw new Error('Invalid geoJson format\n' + e.message);
+        }
+
+        each$1(regions, function (region) {
+            var regionName = region.name;
+
+            fixTextCoord(mapName, region);
+            fixGeoCoord(mapName, region);
+            fixDiaoyuIsland(mapName, region);
+
+            // Some area like Alaska in USA map needs to be tansformed
+            // to look better
+            var specialArea = specialAreas[regionName];
+            if (specialArea) {
+                region.transformTo(
+                    specialArea.left, specialArea.top, specialArea.width, specialArea.height
+                );
+            }
+        });
+
+        fixNanhai(mapName, regions);
+
+        return (inner$7(mapRecord).parsed = {
+            regions: regions,
+            boundingRect: getBoundingRect$1(regions)
+        });
+    }
+};
+
+function getBoundingRect$1(regions) {
+    var rect;
+    for (var i = 0; i < regions.length; i++) {
+        var regionRect = regions[i].getBoundingRect();
+        rect = rect || regionRect.clone();
+        rect.union(regionRect);
+    }
+    return rect;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var inner$8 = makeInner();
+
+var geoSVGLoader = {
+
+    /**
+     * @param {string} mapName
+     * @param {Object} mapRecord {specialAreas, geoJSON}
+     * @return {Object} {root, boundingRect}
+     */
+    load: function (mapName, mapRecord) {
+        var originRoot = inner$8(mapRecord).originRoot;
+        if (originRoot) {
+            return {
+                root: originRoot,
+                boundingRect: inner$8(mapRecord).boundingRect
+            };
+        }
+
+        var graphic = buildGraphic(mapRecord);
+
+        inner$8(mapRecord).originRoot = graphic.root;
+        inner$8(mapRecord).boundingRect = graphic.boundingRect;
+
+        return graphic;
+    },
+
+    makeGraphic: function (mapName, mapRecord, hostKey) {
+        // For performance consideration (in large SVG), graphic only maked
+        // when necessary and reuse them according to hostKey.
+        var field = inner$8(mapRecord);
+        var rootMap = field.rootMap || (field.rootMap = createHashMap());
+
+        var root = rootMap.get(hostKey);
+        if (root) {
+            return root;
+        }
+
+        var originRoot = field.originRoot;
+        var boundingRect = field.boundingRect;
+
+        // For performance, if originRoot is not used by a view,
+        // assign it to a view, but not reproduce graphic elements.
+        if (!field.originRootHostKey) {
+            field.originRootHostKey = hostKey;
+            root = originRoot;
+        }
+        else {
+            root = buildGraphic(mapRecord, boundingRect).root;
+        }
+
+        return rootMap.set(hostKey, root);
+    },
+
+    removeGraphic: function (mapName, mapRecord, hostKey) {
+        var field = inner$8(mapRecord);
+        var rootMap = field.rootMap;
+        rootMap && rootMap.removeKey(hostKey);
+        if (hostKey === field.originRootHostKey) {
+            field.originRootHostKey = null;
+        }
+    }
+};
+
+function buildGraphic(mapRecord, boundingRect) {
+    var svgXML = mapRecord.svgXML;
+    var result;
+    var root;
+
+    try {
+        result = svgXML && parseSVG.parseSVG(svgXML, {
+            ignoreViewBox: true,
+            ignoreRootClip: true
+        }) || {};
+        root = result.root;
+        assert$1(root != null);
+    }
+    catch (e) {
+        throw new Error('Invalid svg format\n' + e.message);
+    }
+
+    var svgWidth = result.width;
+    var svgHeight = result.height;
+    var viewBoxRect = result.viewBoxRect;
+
+    if (!boundingRect) {
+        boundingRect = (svgWidth == null || svgHeight == null)
+            // If svg width / height not specified, calculate
+            // bounding rect as the width / height
+            ? root.getBoundingRect()
+            : new BoundingRect(0, 0, 0, 0);
+
+        if (svgWidth != null) {
+            boundingRect.width = svgWidth;
+        }
+        if (svgHeight != null) {
+            boundingRect.height = svgHeight;
+        }
+    }
+
+    if (viewBoxRect) {
+        var viewBoxTransform = parseSVG.makeViewBoxTransform(viewBoxRect, boundingRect.width, boundingRect.height);
+        var elRoot = root;
+        root = new Group();
+        root.add(elRoot);
+        elRoot.scale = viewBoxTransform.scale;
+        elRoot.position = viewBoxTransform.position;
+    }
+
+    root.setClipPath(new Rect({
+        shape: boundingRect.plain()
+    }));
+
+    return {
+        root: root,
+        boundingRect: boundingRect
+    };
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
+var loaders = {
+    geoJSON: geoJSONLoader,
+    svg: geoSVGLoader
+};
+
+var geoSourceManager = {
+
+    /**
+     * @param {string} mapName
+     * @param {Object} nameMap
+     * @return {Object} source {regions, regionsMap, nameCoordMap, boundingRect}
+     */
+    load: function (mapName, nameMap) {
+        var regions = [];
+        var regionsMap = createHashMap();
+        var nameCoordMap = createHashMap();
+        var boundingRect;
+        var mapRecords = retrieveMap(mapName);
+
+        each$1(mapRecords, function (record) {
+            var singleSource = loaders[record.type].load(mapName, record);
+
+            each$1(singleSource.regions, function (region) {
+                var regionName = region.name;
+
+                // Try use the alias in geoNameMap
+                if (nameMap && nameMap.hasOwnProperty(regionName)) {
+                    region = region.cloneShallow(regionName = nameMap[regionName]);
+                }
+
+                regions.push(region);
+                regionsMap.set(regionName, region);
+                nameCoordMap.set(regionName, region.center);
+            });
+
+            var rect = singleSource.boundingRect;
+            if (rect) {
+                boundingRect
+                    ? boundingRect.union(rect)
+                    : (boundingRect = rect.clone());
+            }
+        });
+
+        return {
+            regions: regions,
+            regionsMap: regionsMap,
+            nameCoordMap: nameCoordMap,
+            // FIXME Always return new ?
+            boundingRect: boundingRect || new BoundingRect(0, 0, 0, 0)
+        };
+    },
+
+    /**
+     * @param {string} mapName
+     * @param {string} hostKey For cache.
+     * @return {Array.<module:zrender/Element>} Roots.
+     */
+    makeGraphic: makeInvoker('makeGraphic'),
+
+    /**
+     * @param {string} mapName
+     * @param {string} hostKey For cache.
+     */
+    removeGraphic: makeInvoker('removeGraphic')
+};
+
+function makeInvoker(methodName) {
+    return function (mapName, hostKey) {
+        var mapRecords = retrieveMap(mapName);
+        var results = [];
+
+        each$1(mapRecords, function (record) {
+            var method = loaders[record.type][methodName];
+            method && results.push(method(mapName, record, hostKey));
+        });
+
+        return results;
+    };
+}
+
+function mapNotExistsError(mapName) {
+    if (__DEV__) {
+        console.error(
+            'Map ' + mapName + ' not exists. You can download map file on http://echarts.baidu.com/download-map.html'
+        );
+    }
+}
+
+function retrieveMap(mapName) {
+    var mapRecords = mapDataStorage.retrieveMap(mapName) || [];
+
+    if (__DEV__) {
+        if (!mapRecords.length) {
+            mapNotExistsError(mapName);
+        }
+    }
+
+    return mapRecords;
+}
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
 
 /**
  * [Geo description]
- * @param {string} name Geo name
+ * For backward compatibility, the orginal interface:
+ * `name, map, geoJson, specialAreas, nameMap` is kept.
+ *
+ * @param {string|Object} name
  * @param {string} map Map type
- * @param {Object} geoJson
- * @param {Object} [specialAreas]
  *        Specify the positioned areas by left, top, width, height
  * @param {Object.<string, string>} [nameMap]
  *        Specify name alias
  */
-function Geo(name, map$$1, geoJson, specialAreas, nameMap) {
+function Geo(name, map$$1, nameMap) {
 
     View.call(this, name);
 
@@ -43222,9 +43711,20 @@ function Geo(name, map$$1, geoJson, specialAreas, nameMap) {
      */
     this.map = map$$1;
 
-    this._nameCoordMap = createHashMap();
+    var source = geoSourceManager.load(map$$1, nameMap);
 
-    this.loadGeoJson(geoJson, specialAreas, nameMap);
+    this._nameCoordMap = source.nameCoordMap;
+    this._regionsMap = source.nameCoordMap;
+
+    /**
+     * @readOnly
+     */
+    this.regions = source.regions;
+
+    /**
+     * @type {module:zrender/src/core/BoundingRect}
+     */
+    this._rect = source.boundingRect;
 }
 
 Geo.prototype = {
@@ -43253,61 +43753,23 @@ Geo.prototype = {
         }
         return false;
     },
+
     /**
-     * @param {Object} geoJson
-     * @param {Object} [specialAreas]
-     *        Specify the positioned areas by left, top, width, height
-     * @param {Object.<string, string>} [nameMap]
-     *        Specify name alias
+     * @override
      */
-    loadGeoJson: function (geoJson, specialAreas, nameMap) {
-        // https://jsperf.com/try-catch-performance-overhead
-        try {
-            this.regions = geoJson ? parseGeoJson$1(geoJson) : [];
-        }
-        catch (e) {
-            throw 'Invalid geoJson format\n' + e.message;
-        }
-        specialAreas = specialAreas || {};
-        nameMap = nameMap || {};
-        var regions = this.regions;
-        var regionsMap = createHashMap();
-        for (var i = 0; i < regions.length; i++) {
-            var regionName = regions[i].name;
-            // Try use the alias in nameMap
-            regionName = nameMap.hasOwnProperty(regionName) ? nameMap[regionName] : regionName;
-            regions[i].name = regionName;
-
-            regionsMap.set(regionName, regions[i]);
-            // Add geoJson
-            this.addGeoCoord(regionName, regions[i].center);
-
-            // Some area like Alaska in USA map needs to be tansformed
-            // to look better
-            var specialArea = specialAreas[regionName];
-            if (specialArea) {
-                regions[i].transformTo(
-                    specialArea.left, specialArea.top, specialArea.width, specialArea.height
-                );
-            }
-        }
-
-        this._regionsMap = regionsMap;
-
-        this._rect = null;
-
-        each$1(geoFixFuncs, function (fixFunc) {
-            fixFunc(this);
-        }, this);
-    },
-
-    // Overwrite
     transformTo: function (x, y, width, height) {
         var rect = this.getBoundingRect();
 
+        // FIXME
+        // Should not name it as invertLng.
+        var invertLng = this.invertLng;
+
         rect = rect.clone();
-        // Longitute is inverted
-        rect.y = -rect.y - rect.height;
+
+        if (invertLng) {
+            // Longitute is inverted
+            rect.y = -rect.y - rect.height;
+        }
 
         var rawTransformable = this._rawTransformable;
 
@@ -43317,8 +43779,10 @@ Geo.prototype = {
 
         rawTransformable.decomposeTransform();
 
-        var scale = rawTransformable.scale;
-        scale[1] = -scale[1];
+        if (invertLng) {
+            var scale = rawTransformable.scale;
+            scale[1] = -scale[1];
+        }
 
         rawTransformable.updateTransform();
 
@@ -43360,21 +43824,11 @@ Geo.prototype = {
         return this._nameCoordMap.get(name);
     },
 
-    // Overwrite
+    /**
+     * @override
+     */
     getBoundingRect: function () {
-        if (this._rect) {
-            return this._rect;
-        }
-        var rect;
-
-        var regions = this.regions;
-        for (var i = 0; i < regions.length; i++) {
-            var regionRect = regions[i].getBoundingRect();
-            rect = rect || regionRect.clone();
-            rect.union(regionRect);
-        }
-        // FIXME Always return new ?
-        return (this._rect = rect || new BoundingRect(0, 0, 0, 0));
+        return this._rect;
     },
 
     /**
@@ -43394,12 +43848,12 @@ Geo.prototype = {
     },
 
     /**
-     * @inheritDoc
+     * @override
      */
     convertToPixel: curry(doConvert, 'dataToPoint'),
 
     /**
-     * @inheritDoc
+     * @override
      */
     convertFromPixel: curry(doConvert, 'pointToData')
 
@@ -43473,8 +43927,7 @@ function resizeGeo(geoModel, api) {
     var viewWidth = api.getWidth();
     var viewHeight = api.getHeight();
 
-    var aspectScale = geoModel.get('aspectScale') || 0.75;
-    var aspect = rect.width / rect.height * aspectScale;
+    var aspect = rect.width / rect.height * this.aspectScale;
 
     var useCenterAndSize = false;
 
@@ -43540,12 +43993,6 @@ function setGeoCoords(geo, model) {
     });
 }
 
-if (__DEV__) {
-    var mapNotExistsError = function (name) {
-        console.error('Map ' + name + ' not exists. You can download map file on http://echarts.baidu.com/download-map.html');
-    };
-}
-
 var geoCreator = {
 
     // For deciding which dimensions to use when creating list data
@@ -43557,17 +44004,8 @@ var geoCreator = {
         // FIXME Create each time may be slow
         ecModel.eachComponent('geo', function (geoModel, idx) {
             var name = geoModel.get('map');
-            var mapData = getMap(name);
-            if (__DEV__) {
-                if (!mapData) {
-                    mapNotExistsError(name);
-                }
-            }
-            var geo = new Geo(
-                name + idx, name,
-                mapData && mapData.geoJson, mapData && mapData.specialAreas,
-                geoModel.get('nameMap')
-            );
+            var geo = new Geo(name + idx, name, geoModel.get('nameMap'));
+
             geo.zoomLimit = geoModel.get('scaleLimit');
             geoList.push(geo);
 
@@ -43575,6 +44013,20 @@ var geoCreator = {
 
             geoModel.coordinateSystem = geo;
             geo.model = geoModel;
+
+            // FIXME ???
+            var aspectScale = geoModel.get('aspectScale');
+            var invertLng = true;
+            var mapRecords = mapDataStorage.retrieveMap(name);
+            if (mapRecords && mapRecords[0] && mapRecords[0].type === 'svg') {
+                aspectScale == null && (aspectScale = 1);
+                invertLng = false;
+            }
+            else {
+                aspectScale == null && (aspectScale = 0.75);
+            }
+            geo.aspectScale = aspectScale;
+            geo.invertLng = invertLng;
 
             // Inject resize method
             geo.resize = resizeGeo;
@@ -43602,21 +44054,11 @@ var geoCreator = {
         });
 
         each$1(mapModelGroupBySeries, function (mapSeries, mapType) {
-            var mapData = getMap(mapType);
-            if (__DEV__) {
-                if (!mapData) {
-                    mapNotExistsError(mapSeries[0].get('map'));
-                }
-            }
-
             var nameMapList = map(mapSeries, function (singleMapSeries) {
                 return singleMapSeries.get('nameMap');
             });
-            var geo = new Geo(
-                mapType, mapType,
-                mapData && mapData.geoJson, mapData && mapData.specialAreas,
-                mergeAll(nameMapList)
-            );
+            var geo = new Geo(mapType, mapType, mergeAll(nameMapList));
+
             geo.zoomLimit = retrieve.apply(null, map(mapSeries, function (singleMapSeries) {
                 return singleMapSeries.get('scaleLimit');
             }));
@@ -43647,34 +44089,18 @@ var geoCreator = {
     getFilledRegions: function (originRegionArr, mapName, nameMap) {
         // Not use the original
         var regionsArr = (originRegionArr || []).slice();
-        nameMap = nameMap || {};
-
-        var map$$1 = getMap(mapName);
-        var geoJson = map$$1 && map$$1.geoJson;
-        if (!geoJson) {
-            if (__DEV__) {
-                mapNotExistsError(mapName);
-            }
-            return originRegionArr;
-        }
 
         var dataNameMap = createHashMap();
-        var features = geoJson.features;
         for (var i = 0; i < regionsArr.length; i++) {
             dataNameMap.set(regionsArr[i].name, regionsArr[i]);
         }
 
-        for (var i = 0; i < features.length; i++) {
-            var name = features[i].properties.name;
-            if (!dataNameMap.get(name)) {
-                if (nameMap.hasOwnProperty(name)) {
-                    name = nameMap[name];
-                }
-                regionsArr.push({
-                    name: name
-                });
-            }
-        }
+        var source = geoSourceManager.load(mapName, nameMap);
+        each$1(source.regions, function (region) {
+            var name = region.name;
+            !dataNameMap.get(name) && regionsArr.push({name: name});
+        });
+
         return regionsArr;
     }
 };
@@ -44065,6 +44491,7 @@ function RoamController(zr) {
      * @param {Object} [opt]
      * @param {Object} [opt.zoomOnMouseWheel=true]
      * @param {Object} [opt.moveOnMouseMove=true]
+     * @param {Object} [opt.moveOnMouseWheel=false]
      * @param {Object} [opt.preventDefaultMouseMove=true] When pan.
      */
     this.enable = function (controlType, opt) {
@@ -44075,6 +44502,7 @@ function RoamController(zr) {
         this._opt = defaults(clone(opt) || {}, {
             zoomOnMouseWheel: true,
             moveOnMouseMove: true,
+            moveOnMouseWheel: false,
             preventDefaultMouseMove: true
         });
 
@@ -44158,7 +44586,7 @@ function mousemove(e) {
 
     this._opt.preventDefaultMouseMove && stop(e.event);
 
-    this.trigger('pan', dx, dy, oldX, oldY, x, y);
+    this.trigger('pan', {dx: dx, dy: dy, oldX: oldX, oldY: oldY, newX: x, newY: y});
 }
 
 function mouseup(e) {
@@ -44168,34 +44596,57 @@ function mouseup(e) {
 }
 
 function mousewheel(e) {
+    var shouldZoom = checkKeyBinding(this, 'zoomOnMouseWheel', e);
+    var shouldMove = checkKeyBinding(this, 'moveOnMouseWheel', e);
+    var wheelDelta = e.wheelDelta;
+    var absWheelDeltaDelta = Math.abs(wheelDelta);
+
     // wheelDelta maybe -0 in chrome mac.
-    if (!checkKeyBinding(this, 'zoomOnMouseWheel', e) || e.wheelDelta === 0) {
+    if (wheelDelta === 0 || (!shouldZoom && !shouldMove)) {
         return;
     }
+    // console.log(wheelDelta);
+    if (shouldZoom) {
+        // Convenience:
+        // Mac and VM Windows on Mac: scroll up: zoom out.
+        // Windows: scroll up: zoom in.
 
-    // Convenience:
-    // Mac and VM Windows on Mac: scroll up: zoom out.
-    // Windows: scroll up: zoom in.
-    var zoomDelta = e.wheelDelta > 0 ? 1.1 : 1 / 1.1;
-    zoom.call(this, e, zoomDelta, e.offsetX, e.offsetY);
+        // FIXME: Should do more test in different environment.
+        // wheelDelta is too complicated in difference nvironment
+        // (https://developer.mozilla.org/en-US/docs/Web/Events/mousewheel),
+        // although it has been normallized by zrender.
+        // wheelDelta of mouse wheel is bigger than touch pad.
+        var factor = absWheelDeltaDelta > 3 ? 1.4 : absWheelDeltaDelta > 1 ? 1.2 : 1.1;
+        var scale = wheelDelta > 0 ? factor : 1 / factor;
+        zoom.call(this, e, scale, e.offsetX, e.offsetY);
+    }
+
+    if (shouldMove) {
+        // FIXME: Should do more test in different environment.
+        var absDelta = Math.abs(wheelDelta);
+        // wheelDelta of mouse wheel is bigger than touch pad.
+        var scrollDelta = absDelta > 3 ? 0.4 : absDelta > 1 ? 0.15 : 0.05;
+        var sign = wheelDelta > 0 ? 1 : -1;
+        this.trigger('scrollMove', {scrollDelta: sign * scrollDelta});
+    }
 }
 
 function pinch(e) {
     if (isTaken(this._zr, 'globalPan')) {
         return;
     }
-    var zoomDelta = e.pinchScale > 1 ? 1.1 : 1 / 1.1;
-    zoom.call(this, e, zoomDelta, e.pinchX, e.pinchY);
+    var scale = e.pinchScale > 1 ? 1.1 : 1 / 1.1;
+    zoom.call(this, e, scale, e.pinchX, e.pinchY);
 }
 
-function zoom(e, zoomDelta, zoomX, zoomY) {
-    if (this.pointerChecker && this.pointerChecker(e, zoomX, zoomY)) {
+function zoom(e, scale, originX, originY) {
+    if (this.pointerChecker && this.pointerChecker(e, originX, originY)) {
         // When mouse is out of roamController rect,
         // default befavoius should not be be disabled, otherwise
         // page sliding is disabled, contrary to expectation.
         stop(e.event);
 
-        this.trigger('zoom', zoomDelta, zoomX, zoomY);
+        this.trigger('zoom', {scale: scale, originX: originX, originY: originY});
     }
 }
 
@@ -44342,17 +44793,17 @@ function getFixedItemStyle(model, scale) {
     return itemStyle;
 }
 
-function updateMapSelectHandler(mapDraw, mapOrGeoModel, group, api, fromView) {
-    group.off('click');
-    group.off('mousedown');
+function updateMapSelectHandler(mapDraw, mapOrGeoModel, regionsGroup, api, fromView) {
+    regionsGroup.off('click');
+    regionsGroup.off('mousedown');
 
     if (mapOrGeoModel.get('selectedMode')) {
 
-        group.on('mousedown', function () {
+        regionsGroup.on('mousedown', function () {
             mapDraw._mouseDownFlag = true;
         });
 
-        group.on('click', function (e) {
+        regionsGroup.on('click', function (e) {
             if (!mapDraw._mouseDownFlag) {
                 return;
             }
@@ -44379,14 +44830,14 @@ function updateMapSelectHandler(mapDraw, mapOrGeoModel, group, api, fromView) {
 
             api.dispatchAction(action);
 
-            updateMapSelected(mapOrGeoModel, group);
+            updateMapSelected(mapOrGeoModel, regionsGroup);
         });
     }
 }
 
-function updateMapSelected(mapOrGeoModel, group) {
+function updateMapSelected(mapOrGeoModel, regionsGroup) {
     // FIXME
-    group.eachChild(function (otherRegionEl) {
+    regionsGroup.eachChild(function (otherRegionEl) {
         each$1(otherRegionEl.__regions, function (region) {
             otherRegionEl.trigger(mapOrGeoModel.isSelected(region.name) ? 'emphasis' : 'normal');
         });
@@ -44401,6 +44852,12 @@ function updateMapSelected(mapOrGeoModel, group) {
 function MapDraw(api, updateGroup) {
 
     var group = new Group();
+
+    /**
+     * @type {string}
+     * @private
+     */
+    this.uid = getUID('ec_map_draw');
 
     /**
      * @type {module:echarts/component/helper/RoamController}
@@ -44433,6 +44890,26 @@ function MapDraw(api, updateGroup) {
      * @type {booelan}
      */
     this._mouseDownFlag;
+
+    /**
+     * @type {string}
+     */
+    this._mapName;
+
+    /**
+     * @type {boolean}
+     */
+    this._initialized;
+
+    /**
+     * @type {module:zrender/container/Group}
+     */
+    group.add(this._regionsGroup = new Group());
+
+    /**
+     * @type {module:zrender/container/Group}
+     */
+    group.add(this._backgroundGroup = new Group());
 }
 
 MapDraw.prototype = {
@@ -44454,23 +44931,26 @@ MapDraw.prototype = {
 
         var geo = mapOrGeoModel.coordinateSystem;
 
+        this._updateBackground(geo);
+
+        var regionsGroup = this._regionsGroup;
         var group = this.group;
 
         var scale = geo.scale;
-        var groupNewProp = {
+        var transform = {
             position: geo.position,
             scale: scale
         };
 
         // No animation when first draw or in action
-        if (!group.childAt(0) || payload) {
-            group.attr(groupNewProp);
+        if (!regionsGroup.childAt(0) || payload) {
+            group.attr(transform);
         }
         else {
-            updateProps(group, groupNewProp, mapOrGeoModel);
+            updateProps(group, transform, mapOrGeoModel);
         }
 
-        group.removeAll();
+        regionsGroup.removeAll();
 
         var itemStyleAccessPath = ['itemStyle'];
         var hoverItemStyleAccessPath = ['emphasis', 'itemStyle'];
@@ -44612,20 +45092,35 @@ MapDraw.prototype = {
                 {hoverSilentOnTouch: !!mapOrGeoModel.get('selectedMode')}
             );
 
-            group.add(regionGroup);
+            regionsGroup.add(regionGroup);
         });
 
         this._updateController(mapOrGeoModel, ecModel, api);
 
-        updateMapSelectHandler(this, mapOrGeoModel, group, api, fromView);
+        updateMapSelectHandler(this, mapOrGeoModel, regionsGroup, api, fromView);
 
-        updateMapSelected(mapOrGeoModel, group);
+        updateMapSelected(mapOrGeoModel, regionsGroup);
     },
 
     remove: function () {
-        this.group.removeAll();
+        this._regionsGroup.removeAll();
+        this._backgroundGroup.removeAll();
         this._controller.dispose();
+        this._mapName && geoSourceManager.removeGraphic(this._mapName, this.uid);
+        this._mapName = null;
         this._controllerHost = {};
+    },
+
+    _updateBackground: function (geo) {
+        var mapName = geo.map;
+
+        if (this._mapName !== mapName) {
+            each$1(geoSourceManager.makeGraphic(mapName, this.uid), function (root) {
+                this._backgroundGroup.add(root);
+            }, this);
+        }
+
+        this._mapName = mapName;
     },
 
     _updateController: function (mapOrGeoModel, ecModel, api) {
@@ -44649,32 +45144,31 @@ MapDraw.prototype = {
             return action;
         }
 
-        controller.off('pan').on('pan', function (dx, dy) {
+        controller.off('pan').on('pan', function (e) {
             this._mouseDownFlag = false;
 
-            updateViewOnPan(controllerHost, dx, dy);
+            updateViewOnPan(controllerHost, e.dx, e.dy);
 
             api.dispatchAction(extend(makeActionBase(), {
-                dx: dx,
-                dy: dy
+                dx: e.dx,
+                dy: e.dy
             }));
         }, this);
 
-        controller.off('zoom').on('zoom', function (zoom, mouseX, mouseY) {
+        controller.off('zoom').on('zoom', function (e) {
             this._mouseDownFlag = false;
 
-            updateViewOnZoom(controllerHost, zoom, mouseX, mouseY);
+            updateViewOnZoom(controllerHost, e.scale, e.originX, e.originY);
 
             api.dispatchAction(extend(makeActionBase(), {
-                zoom: zoom,
-                originX: mouseX,
-                originY: mouseY
+                zoom: e.scale,
+                originX: e.originX,
+                originY: e.originY
             }));
 
             if (this._updateGroup) {
-                var group = this.group;
-                var scale = group.scale;
-                group.traverse(function (el) {
+                var scale = this.group.scale;
+                this._regionsGroup.traverse(function (el) {
                     if (el.type === 'text') {
                         el.attr('scale', [1 / scale[0], 1 / scale[1]]);
                     }
@@ -45980,6 +46474,7 @@ function addChild(child, node) {
 
 /**
  * @file Create data struct and define tree view's series model
+ * @author Deqing Li(annong035@gmail.com)
  */
 
 SeriesModel.extend({
@@ -46032,7 +46527,7 @@ SeriesModel.extend({
 
         return tree.data;
     },
-    
+
     /**
      * Make the configuration 'orient' backward compatibly, with 'horizontal = LR', 'vertical = TB'.
      * @returns {string} orient
@@ -46046,6 +46541,14 @@ SeriesModel.extend({
             orient = 'TB';
         }
         return orient;
+    },
+
+    setZoom: function (zoom) {
+        this.option.zoom = zoom;
+    },
+
+    setCenter: function (center) {
+        this.option.center = center;
     },
 
     /**
@@ -46079,6 +46582,15 @@ SeriesModel.extend({
 
         // the layout of the tree, two value can be selected, 'orthogonal' or 'radial'
         layout: 'orthogonal',
+
+        roam: false,
+        // Symbol size scale ratio in roam
+        nodeScaleRatio: 0.4,
+
+        // Default on center of graph
+        center: null,
+
+        zoom: 1,
 
         // The orient of orthoginal layout, can be setted to 'LR', 'TB', 'RL', 'BT'.
         // and the backward compatibility configuration 'horizontal = LR', 'vertical = TB'.
@@ -46390,7 +46902,7 @@ function nextAncestor(nodeInLeft, node, ancestor) {
  * @param  {module:echarts/data/Tree~TreeNode} wr
  * @param  {number} shift [description]
  */
-function moveSubtree(wl, wr,shift) {
+function moveSubtree(wl, wr, shift) {
     var change = shift / (wr.hierNode.i - wl.hierNode.i);
     wr.hierNode.change -= change;
     wr.hierNode.shift += shift;
@@ -46424,6 +46936,7 @@ function defaultSeparation(node1, node2) {
 
 /**
  * @file  This file used to draw tree view
+ * @author Deqing Li(annong035@gmail.com)
  */
 
 extendChartView({
@@ -46451,6 +46964,9 @@ extendChartView({
         this._mainGroup = new Group();
 
         this.group.add(this._mainGroup);
+
+        this._controller = new RoamController(api.getZr());
+        this._controllerHost = {target: this.group};
     },
 
     render: function (seriesModel, ecModel, api, payload) {
@@ -46469,6 +46985,9 @@ extendChartView({
         else {
             group.attr('position', [layoutInfo.x, layoutInfo.y]);
         }
+
+        this._updateViewCoordSys(seriesModel);
+        this._updateController(seriesModel, ecModel, api);
 
         var oldData = this._data;
 
@@ -46513,6 +47032,10 @@ extendChartView({
             })
             .execute();
 
+        this._nodeScaleRatio = seriesModel.get('nodeScaleRatio');
+
+        this._updateNodeAndLinkScale(seriesModel);
+
         if (seriesScope.expandAndCollapse === true) {
             data.eachItemGraphicEl(function (el, dataIndex) {
                 el.off('click').on('click', function () {
@@ -46528,7 +47051,114 @@ extendChartView({
         this._data = data;
     },
 
-    dispose: function () {},
+    _updateViewCoordSys: function (seriesModel) {
+        var data = seriesModel.getData();
+        var points = [];
+        data.each(function (idx) {
+            var layout = data.getItemLayout(idx);
+            if (layout && !isNaN(layout.x) && !isNaN(layout.y)) {
+                points.push([+layout.x, +layout.y]);
+            }
+        });
+        var min = [];
+        var max = [];
+        fromPoints(points, min, max);
+        // If width or height is 0
+        if (max[0] - min[0] === 0) {
+            max[0] += 1;
+            min[0] -= 1;
+        }
+        if (max[1] - min[1] === 0) {
+            max[1] += 1;
+            min[1] -= 1;
+        }
+
+        var viewCoordSys = seriesModel.coordinateSystem = new View();
+        viewCoordSys.zoomLimit = seriesModel.get('scaleLimit');
+
+        viewCoordSys.setBoundingRect(min[0], min[1], max[0] - min[0], max[1] - min[1]);
+
+        viewCoordSys.setCenter(seriesModel.get('center'));
+        viewCoordSys.setZoom(seriesModel.get('zoom'));
+
+        this.group.attr({
+            position: viewCoordSys.position,
+            scale: viewCoordSys.scale
+        });
+
+        this._viewCoordSys = viewCoordSys;
+    },
+
+    _updateController: function (seriesModel, ecModel, api) {
+        var controller = this._controller;
+        var controllerHost = this._controllerHost;
+        var group = this.group;
+        controller.setPointerChecker(function (e, x, y) {
+            var rect = group.getBoundingRect();
+            rect.applyTransform(group.transform);
+            return rect.contain(x, y)
+                && !onIrrelevantElement(e, api, seriesModel);
+        });
+
+        controller.enable(seriesModel.get('roam'));
+        controllerHost.zoomLimit = seriesModel.get('scaleLimit');
+        controllerHost.zoom = seriesModel.coordinateSystem.getZoom();
+
+        controller.off('pan').off('zoom')
+            .on('pan', function (e) {
+                updateViewOnPan(controllerHost, e.dx, e.dy);
+                api.dispatchAction({
+                    seriesId: seriesModel.id,
+                    type: 'treeRoam',
+                    dx: e.dx,
+                    dy: e.dy
+                });
+            }, this)
+            .on('zoom', function (e) {
+                updateViewOnZoom(controllerHost, e.scale, e.originX, e.originY);
+                api.dispatchAction({
+                    seriesId: seriesModel.id,
+                    type: 'treeRoam',
+                    zoom: e.scale,
+                    originX: e.originX,
+                    originY: e.originY
+                });
+                this._updateNodeAndLinkScale(seriesModel);
+            }, this);
+    },
+
+    _updateNodeAndLinkScale: function (seriesModel) {
+        var data = seriesModel.getData();
+
+        var nodeScale = this._getNodeGlobalScale(seriesModel);
+        var invScale = [nodeScale, nodeScale];
+
+        data.eachItemGraphicEl(function (el, idx) {
+            el.attr('scale', invScale);
+        });
+    },
+
+    _getNodeGlobalScale: function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+        if (coordSys.type !== 'view') {
+            return 1;
+        }
+
+        var nodeScaleRatio = this._nodeScaleRatio;
+
+        var groupScale = coordSys.scale;
+        var groupZoom = (groupScale && groupScale[0]) || 1;
+        // Scale node when zoom changes
+        var roamZoom = coordSys.getZoom();
+        var nodeScale = (roamZoom - 1) * nodeScaleRatio + 1;
+
+        return nodeScale / groupZoom;
+    },
+
+    dispose: function () {
+        this._controller && this._controller.dispose();
+        this._controllerHost = {};
+    },
 
     remove: function () {
         this._mainGroup.removeAll();
@@ -46657,7 +47287,7 @@ function updateNode(data, dataIndex, symbolEl, group, seriesModel, seriesScope) 
         if (!edge) {
             edge = symbolEl.__edge = new BezierCurve({
                 shape: getEdgeShape(seriesScope, sourceOldLayout, sourceOldLayout),
-                style: defaults({opacity: 0}, seriesScope.lineStyle)
+                style: defaults({opacity: 0, strokeNoScale: true}, seriesScope.lineStyle)
             });
         }
 
@@ -46794,6 +47424,24 @@ registerAction({
         var node = tree.getNodeByDataIndex(dataIndex);
         node.isExpand = !node.isExpand;
 
+    });
+});
+
+registerAction({
+    type: 'treeRoam',
+    event: 'treeRoam',
+    update: 'none'
+}, function (payload, ecModel) {
+    ecModel.eachComponent({mainType: 'series', query: payload}, function (seriesModel) {
+        var coordSys = seriesModel.coordinateSystem;
+
+        var res = updateCenterAndZoom(coordSys, payload);
+
+        seriesModel.setCenter
+            && seriesModel.setCenter(res.center);
+
+        seriesModel.setZoom
+            && seriesModel.setZoom(res.zoom);
     });
 });
 
@@ -47026,6 +47674,11 @@ function retrieveTargetInfo(payload, validPayloadTypes, seriesModel) {
     if (payload && indexOf(validPayloadTypes, payload.type) >= 0) {
         var root = seriesModel.getData().tree.root;
         var targetNode = payload.targetNode;
+
+        if (typeof targetNode === 'string') {
+            targetNode = root.getNodeById(targetNode);
+        }
+
         if (targetNode && root.contains(targetNode)) {
             return {node: targetNode};
         }
@@ -48153,9 +48806,9 @@ extendChartView({
     /**
      * @private
      */
-    _onPan: function (dx, dy) {
+    _onPan: function (e) {
         if (this._state !== 'animating'
-            && (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD)
+            && (Math.abs(e.dx) > DRAG_THRESHOLD || Math.abs(e.dy) > DRAG_THRESHOLD)
         ) {
             // These param must not be cached.
             var root = this.seriesModel.getData().tree.root;
@@ -48175,7 +48828,7 @@ extendChartView({
                 from: this.uid,
                 seriesId: this.seriesModel.id,
                 rootRect: {
-                    x: rootLayout.x + dx, y: rootLayout.y + dy,
+                    x: rootLayout.x + e.dx, y: rootLayout.y + e.dy,
                     width: rootLayout.width, height: rootLayout.height
                 }
             });
@@ -48185,7 +48838,10 @@ extendChartView({
     /**
      * @private
      */
-    _onZoom: function (scale, mouseX, mouseY) {
+    _onZoom: function (e) {
+        var mouseX = e.originX;
+        var mouseY = e.originY;
+
         if (this._state !== 'animating') {
             // These param must not be cached.
             var root = this.seriesModel.getData().tree.root;
@@ -48212,7 +48868,7 @@ extendChartView({
             // Scale root bounding rect.
             var m = create$1();
             translate(m, m, [-mouseX, -mouseY]);
-            scale$1(m, m, [scale, scale]);
+            scale$1(m, m, [e.scale, e.scale]);
             translate(m, m, [mouseX, mouseY]);
 
             rect.applyTransform(m);
@@ -52033,7 +52689,7 @@ extendChartView({
             var itemModel = data.getItemModel(idx);
             // Update draggable
             el.off('drag').off('dragend');
-            var draggable = data.getItemModel(idx).get('draggable');
+            var draggable = itemModel.get('draggable');
             if (draggable) {
                 el.on('drag', function () {
                     if (forceLayout) {
@@ -52222,23 +52878,23 @@ extendChartView({
         controller
             .off('pan')
             .off('zoom')
-            .on('pan', function (dx, dy) {
-                updateViewOnPan(controllerHost, dx, dy);
+            .on('pan', function (e) {
+                updateViewOnPan(controllerHost, e.dx, e.dy);
                 api.dispatchAction({
                     seriesId: seriesModel.id,
                     type: 'graphRoam',
-                    dx: dx,
-                    dy: dy
+                    dx: e.dx,
+                    dy: e.dy
                 });
             })
-            .on('zoom', function (zoom, mouseX, mouseY) {
-                updateViewOnZoom(controllerHost, zoom, mouseX, mouseY);
+            .on('zoom', function (e) {
+                updateViewOnZoom(controllerHost, e.scale, e.originX, e.originY);
                 api.dispatchAction({
                     seriesId: seriesModel.id,
                     type: 'graphRoam',
-                    zoom:  zoom,
-                    originX: mouseX,
-                    originY: mouseY
+                    zoom: e.scale,
+                    originX: e.originX,
+                    originY: e.originY
                 });
                 this._updateNodeAndLinkScale();
                 adjustEdge(seriesModel.getGraph(), this._getNodeGlobalScale(seriesModel));
@@ -52307,6 +52963,50 @@ extendChartView({
 * under the License.
 */
 
+/**
+ * @payload
+ * @property {number} [seriesIndex]
+ * @property {string} [seriesId]
+ * @property {string} [seriesName]
+ * @property {number} [dataIndex]
+ */
+registerAction({
+    type: 'focusNodeAdjacency',
+    event: 'focusNodeAdjacency',
+    update: 'series:focusNodeAdjacency'
+}, function () {});
+
+/**
+ * @payload
+ * @property {number} [seriesIndex]
+ * @property {string} [seriesId]
+ * @property {string} [seriesName]
+ */
+registerAction({
+    type: 'unfocusNodeAdjacency',
+    event: 'unfocusNodeAdjacency',
+    update: 'series:unfocusNodeAdjacency'
+}, function () {});
+
+/*
+* Licensed to the Apache Software Foundation (ASF) under one
+* or more contributor license agreements.  See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership.  The ASF licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License.  You may obtain a copy of the License at
+*
+*   http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied.  See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
+
 var actionInfo = {
     type: 'graphRoam',
     event: 'graphRoam',
@@ -52335,32 +53035,6 @@ registerAction(actionInfo, function (payload, ecModel) {
             && seriesModel.setZoom(res.zoom);
     });
 });
-
-
-/**
- * @payload
- * @property {number} [seriesIndex]
- * @property {string} [seriesId]
- * @property {string} [seriesName]
- * @property {number} [dataIndex]
- */
-registerAction({
-    type: 'focusNodeAdjacency',
-    event: 'focusNodeAdjacency',
-    update: 'series.graph:focusNodeAdjacency'
-}, function () {});
-
-/**
- * @payload
- * @property {number} [seriesIndex]
- * @property {string} [seriesId]
- * @property {string} [seriesName]
- */
-registerAction({
-    type: 'unfocusNodeAdjacency',
-    event: 'unfocusNodeAdjacency',
-    update: 'series.graph:unfocusNodeAdjacency'
-}, function () {});
 
 /*
 * Licensed to the Apache Software Foundation (ASF) under one
@@ -57502,6 +58176,8 @@ var SankeySeries = SeriesModel.extend({
 
         // control if the node can move or not
         draggable: true,
+       
+        focusNodeAdjacency: false,
 
         // the number of iterations to change the position of the node
         layoutIterations: 32,
@@ -57563,6 +58239,42 @@ var SankeySeries = SeriesModel.extend({
  * @file  The file used to draw sankey view
  * @author  Deqing Li(annong035@gmail.com)
  */
+
+var nodeOpacityPath$1 = ['itemStyle', 'opacity'];
+var lineOpacityPath$1 = ['lineStyle', 'opacity'];
+
+function getItemOpacity$1(item, opacityPath) {
+    return item.getVisual('opacity') || item.getModel().get(opacityPath);
+}
+
+function fadeOutItem$1(item, opacityPath, opacityRatio) {
+    var el = item.getGraphicEl();
+
+    var opacity = getItemOpacity$1(item, opacityPath);
+    if (opacityRatio != null) {
+        opacity == null && (opacity = 1);
+        opacity *= opacityRatio;
+    }
+
+    el.downplay && el.downplay();
+    el.traverse(function (child) {
+        if (child.type !== 'group') {
+            child.setStyle('opacity', opacity);
+        }
+    });
+}
+
+function fadeInItem$1(item, opacityPath) {
+    var opacity = getItemOpacity$1(item, opacityPath);
+    var el = item.getGraphicEl();
+
+    el.highlight && el.highlight();
+    el.traverse(function (child) {
+        if (child.type !== 'group') {
+            child.setStyle('opacity', opacity);
+        }
+    });
+}
 
 var SankeyShape = extendShape({
     shape: {
@@ -57719,10 +58431,11 @@ extendChartView({
 
             rect.dataType = 'node';
         });
-
-        var draggable = seriesModel.get('draggable');
-        if (draggable) {
-            nodeData.eachItemGraphicEl(function (el, dataIndex) {
+       
+        nodeData.eachItemGraphicEl(function (el, dataIndex) {
+            var itemModel = nodeData.getItemModel(dataIndex);
+            // var draggable = seriesModel.get('draggable');
+            if (itemModel.get('draggable')) {
                 el.drift = function (dx, dy) {
                     this.shape.x += dx;
                     this.shape.y += dy;
@@ -57738,9 +58451,45 @@ extendChartView({
         
                 el.draggable = true;
                 el.cursor = 'move';
-            });
-        }
-        
+
+            }
+            
+            if (itemModel.get('focusNodeAdjacency')) {
+                el.off('mouseover').on('mouseover', function () {
+                    api.dispatchAction({
+                        type: 'focusNodeAdjacency',
+                        seriesId: seriesModel.id,
+                        dataIndex: el.dataIndex
+                    });
+                });
+                el.off('mouseout').on('mouseout', function () {
+                    api.dispatchAction({
+                        type: 'unfocusNodeAdjacency',
+                        seriesId: seriesModel.id
+                    });
+                });
+            }
+        });
+
+        edgeData.eachItemGraphicEl(function (el, dataIndex) {
+            var edgeModel = edgeData.getItemModel(dataIndex);
+            if (edgeModel.get('focusNodeAdjacency')) {
+                el.off('mouseover').on('mouseover', function () {
+                    api.dispatchAction({
+                        type: 'focusNodeAdjacency',
+                        seriesId: seriesModel.id,
+                        edgeDataIndex: el.dataIndex
+                    });
+                });
+                el.off('mouseout').on('mouseout', function () {
+                    api.dispatchAction({
+                        type: 'unfocusNodeAdjacency',
+                        seriesId: seriesModel.id,
+                    });
+                });
+            }
+        });
+
         if (!this._data && seriesModel.get('animation')) {
             group.setClipPath(createGridClipShape$2(group.getBoundingRect(), seriesModel, function () {
                 group.removeClipPath();
@@ -57750,7 +58499,77 @@ extendChartView({
         this._data = seriesModel.getData();
     },
 
-    dispose: function () {}
+    dispose: function () {},
+
+    focusNodeAdjacency: function (seriesModel, ecModel, api, payload) {
+        var data = this._model.getData();
+        var graph = data.graph;
+        var dataIndex = payload.dataIndex;
+        var itemModel = data.getItemModel(dataIndex);
+        var edgeDataIndex = payload.edgeDataIndex;
+        
+        if (dataIndex == null && edgeDataIndex == null) {
+            return;
+        }
+        var node = graph.getNodeByIndex(dataIndex);
+        var edge = graph.getEdgeByIndex(edgeDataIndex);
+
+        graph.eachNode(function (node) {
+            fadeOutItem$1(node, nodeOpacityPath$1, 0.1);
+        });
+        graph.eachEdge(function (edge) {
+            fadeOutItem$1(edge, lineOpacityPath$1, 0.1);
+        });
+
+        if (node) {
+            fadeInItem$1(node, nodeOpacityPath$1);
+            var focusNodeAdj = itemModel.get('focusNodeAdjacency');
+            if (focusNodeAdj === 'outEdges') {
+                each$1(node.outEdges, function (edge) {
+                    if (edge.dataIndex < 0) {
+                        return;
+                    }
+                    fadeInItem$1(edge, lineOpacityPath$1);
+                    fadeInItem$1(edge.node2, nodeOpacityPath$1);
+                });
+            }
+            else if (focusNodeAdj === 'inEdges') {
+                each$1(node.inEdges, function (edge) {
+                    if (edge.dataIndex < 0) {
+                        return;
+                    }
+                    fadeInItem$1(edge, lineOpacityPath$1);
+                    fadeInItem$1(edge.node1, nodeOpacityPath$1);
+                });
+            }
+            else if (focusNodeAdj === 'allEdges') {
+                each$1(node.edges, function (edge) {
+                    if (edge.dataIndex < 0) {
+                        return;
+                    }
+                    fadeInItem$1(edge, lineOpacityPath$1);
+                    fadeInItem$1(edge.node1, nodeOpacityPath$1);
+                    fadeInItem$1(edge.node2, nodeOpacityPath$1);
+                });
+            }
+        }
+        if (edge) {
+            fadeInItem$1(edge, lineOpacityPath$1);
+            fadeInItem$1(edge.node1, nodeOpacityPath$1);
+            fadeInItem$1(edge.node2, nodeOpacityPath$1);
+        }
+    },
+
+    unfocusNodeAdjacency: function (seriesModel, ecModel, api, payload) {
+        var graph = this._model.getGraph();
+
+        graph.eachNode(function (node) {
+            fadeOutItem$1(node, nodeOpacityPath$1);
+        });
+        graph.eachEdge(function (edge) {
+            fadeOutItem$1(edge, lineOpacityPath$1);
+        });
+    }
 });
 
 // add animation to the view
@@ -57791,6 +58610,11 @@ function createGridClipShape$2(rect, seriesModel, cb) {
 * specific language governing permissions and limitations
 * under the License.
 */
+
+/**
+ * @file The interactive action of sankey view
+ * @author Deqing Li(annong035@gmail.com)
+ */
 
 registerAction({
     type: 'dragNode',
@@ -63860,7 +64684,7 @@ var findPointFromSeries = function (finder, ecModel) {
 
 var each$14 = each$1;
 var curry$3 = curry;
-var inner$7 = makeInner();
+var inner$9 = makeInner();
 
 /**
  * Basic logic: check all axis, if they do not demand show/highlight,
@@ -64193,8 +65017,8 @@ function dispatchHighDownActually(axesInfo, dispatchAction, api) {
 
     var zr = api.getZr();
     var highDownKey = 'axisPointerLastHighlights';
-    var lastHighlights = inner$7(zr)[highDownKey] || {};
-    var newHighlights = inner$7(zr)[highDownKey] = {};
+    var lastHighlights = inner$9(zr)[highDownKey] || {};
+    var newHighlights = inner$9(zr)[highDownKey] = {};
 
     // Update highlight/downplay status according to axisPointer model.
     // Build hash map and remove duplicate incidentally.
@@ -64378,7 +65202,7 @@ var AxisPointerModel = extendComponentModel({
 * under the License.
 */
 
-var inner$8 = makeInner();
+var inner$10 = makeInner();
 var each$15 = each$1;
 
 /**
@@ -64394,20 +65218,20 @@ function register(key, api, handler) {
     }
 
     var zr = api.getZr();
-    inner$8(zr).records || (inner$8(zr).records = {});
+    inner$10(zr).records || (inner$10(zr).records = {});
 
     initGlobalListeners(zr, api);
 
-    var record = inner$8(zr).records[key] || (inner$8(zr).records[key] = {});
+    var record = inner$10(zr).records[key] || (inner$10(zr).records[key] = {});
     record.handler = handler;
 }
 
 function initGlobalListeners(zr, api) {
-    if (inner$8(zr).initialized) {
+    if (inner$10(zr).initialized) {
         return;
     }
 
-    inner$8(zr).initialized = true;
+    inner$10(zr).initialized = true;
 
     useHandler('click', curry(doEnter, 'click'));
     useHandler('mousemove', curry(doEnter, 'mousemove'));
@@ -64418,7 +65242,7 @@ function initGlobalListeners(zr, api) {
         zr.on(eventType, function (e) {
             var dis = makeDispatchAction(api);
 
-            each$15(inner$8(zr).records, function (record) {
+            each$15(inner$10(zr).records, function (record) {
                 record && cb(record, e, dis.dispatchAction);
             });
 
@@ -64488,9 +65312,9 @@ function unregister(key, api) {
         return;
     }
     var zr = api.getZr();
-    var record = (inner$8(zr).records || {})[key];
+    var record = (inner$10(zr).records || {})[key];
     if (record) {
-        inner$8(zr).records[key] = null;
+        inner$10(zr).records[key] = null;
     }
 }
 
@@ -64580,7 +65404,7 @@ var AxisPointerView = extendComponentView({
 * under the License.
 */
 
-var inner$9 = makeInner();
+var inner$11 = makeInner();
 var clone$4 = clone;
 var bind$2 = bind;
 
@@ -64767,7 +65591,7 @@ BaseAxisPointer.prototype = {
     createPointerEl: function (group, elOption, axisModel, axisPointerModel) {
         var pointerOption = elOption.pointer;
         if (pointerOption) {
-            var pointerEl = inner$9(group).pointerEl = new graphic[pointerOption.type](
+            var pointerEl = inner$11(group).pointerEl = new graphic[pointerOption.type](
                 clone$4(elOption.pointer)
             );
             group.add(pointerEl);
@@ -64779,7 +65603,7 @@ BaseAxisPointer.prototype = {
      */
     createLabelEl: function (group, elOption, axisModel, axisPointerModel) {
         if (elOption.label) {
-            var labelEl = inner$9(group).labelEl = new Rect(
+            var labelEl = inner$11(group).labelEl = new Rect(
                 clone$4(elOption.label)
             );
 
@@ -64792,7 +65616,7 @@ BaseAxisPointer.prototype = {
      * @protected
      */
     updatePointerEl: function (group, elOption, updateProps$$1) {
-        var pointerEl = inner$9(group).pointerEl;
+        var pointerEl = inner$11(group).pointerEl;
         if (pointerEl) {
             pointerEl.setStyle(elOption.pointer.style);
             updateProps$$1(pointerEl, {shape: elOption.pointer.shape});
@@ -64803,7 +65627,7 @@ BaseAxisPointer.prototype = {
      * @protected
      */
     updateLabelEl: function (group, elOption, updateProps$$1, axisPointerModel) {
-        var labelEl = inner$9(group).labelEl;
+        var labelEl = inner$11(group).labelEl;
         if (labelEl) {
             labelEl.setStyle(elOption.label.style);
             updateProps$$1(labelEl, {
@@ -64919,7 +65743,7 @@ BaseAxisPointer.prototype = {
 
         handle.stopAnimation();
         handle.attr(getHandleTransProps(trans));
-        inner$9(handle).lastProp = null;
+        inner$11(handle).lastProp = null;
 
         this._doDispatchAxisPointer();
     },
@@ -65041,8 +65865,8 @@ BaseAxisPointer.prototype.constructor = BaseAxisPointer;
 
 function updateProps$1(animationModel, moveAnimation, el, props) {
     // Animation optimize.
-    if (!propsEqual(inner$9(el).lastProp, props)) {
-        inner$9(el).lastProp = props;
+    if (!propsEqual(inner$11(el).lastProp, props)) {
+        inner$11(el).lastProp = props;
         moveAnimation
             ? updateProps(el, props, animationModel)
             : (el.stopAnimation(), el.attr(props));
@@ -66330,7 +67154,7 @@ function computeBaseline(data) {
 
 /**
  * @file Visual encoding for themeRiver view
- * @author  Deqing Li(annong035@gmail.com)
+ * @author Deqing Li(annong035@gmail.com)
  */
 
 var themeRiverVisual = function (ecModel) {
@@ -70694,6 +71518,13 @@ TooltipContent.prototype = {
 
         el.style.display = el.innerHTML ?  'block' : 'none';
 
+        // If mouse occsionally move over the tooltip, a mouseout event will be
+        // triggered by canvas, and cuase some unexpectable result like dragging
+        // stop, "unfocusAdjacency". Here `pointer-events: none` is used to solve
+        // it. Although it is not suppored by IE8~IE10, fortunately it is a rare
+        // scenario.
+        el.style.pointerEvents = this._enterable ? 'auto' : 'none';
+
         this._show = true;
     },
 
@@ -73264,14 +74095,15 @@ var GeoModel = ComponentModel.extend({
 
         // Aspect is width / height. Inited to be geoJson bbox aspect
         // This parameter is used for scale this aspect
-        aspectScale: 0.75,
+        // If svg used, aspectScale is 1 by default.
+        // aspectScale: 0.75,
+        aspectScale: null,
 
         ///// Layout with center and size
         // If you wan't to put map in a fixed size box with right aspect ratio
         // This two properties may more conveninet
         // layoutCenter: [50%, 50%]
         // layoutSize: 100
-
 
         silent: false,
 
@@ -75418,19 +76250,25 @@ Calendar.prototype = {
         var week = dayInfo.day;
         var nthWeek = this._getRangeInfo([range.start.time, date]).nthWeek;
 
+        // Trading Custom:
+        // Donot show last column(Saturday) of week
+        if (week === 5) {
+            return [NaN, NaN];
+        } else if (week === 6) {
+            week = 5;
+        }
+
         if (this._orient === 'vertical') {
             return [
                 this._rect.x + week * this._sw + this._sw / 2,
                 this._rect.y + nthWeek * this._sh + this._sh / 2
             ];
-
         }
 
         return [
             this._rect.x + nthWeek * this._sw + this._sw / 2,
             this._rect.y + week * this._sh + this._sh / 2
         ];
-
     },
 
     /**
@@ -78821,6 +79659,7 @@ DataZoomModel.extend({
         zoomLock: false,   // Whether disable zoom but only pan.
         zoomOnMouseWheel: true, // Can be: true / false / 'shift' / 'ctrl' / 'alt'.
         moveOnMouseMove: true,   // Can be: true / false / 'shift' / 'ctrl' / 'alt'.
+        moveOnMouseWheel: false, // Can be: true / false / 'shift' / 'ctrl' / 'alt'.
         preventDefaultMouseMove: true
     }
 });
@@ -78850,8 +79689,6 @@ DataZoomModel.extend({
 // pan or zoom, only dispatch one action for those data zoom
 // components.
 
-var curry$6 = curry;
-
 var ATTR$1 = '\0_ec_dataZoom_roams';
 
 
@@ -78864,8 +79701,10 @@ var ATTR$1 = '\0_ec_dataZoom_roams';
  * @param {Array.<string>} dataZoomInfo.allCoordIds
  * @param {string} dataZoomInfo.dataZoomId
  * @param {number} dataZoomInfo.throttleRate
- * @param {Function} dataZoomInfo.panGetRange
- * @param {Function} dataZoomInfo.zoomGetRange
+ * @param {Object} dataZoomInfo.getRange
+ * @param {Function} dataZoomInfo.getRange.pan
+ * @param {Function} dataZoomInfo.getRange.zoom
+ * @param {Function} dataZoomInfo.getRange.scrollMove
  * @param {boolean} [dataZoomInfo.zoomLock]
  * @param {boolean} [dataZoomInfo.disabled]
  */
@@ -78959,8 +79798,15 @@ function giveStore(api) {
 
 function createController(api, newRecord) {
     var controller = new RoamController(api.getZr());
-    controller.on('pan', curry$6(onPan, newRecord));
-    controller.on('zoom', curry$6(onZoom, newRecord));
+
+    each$1(['pan', 'zoom', 'scrollMove'], function (eventName) {
+        controller.on(eventName, function (event) {
+            wrapAndDispatch(newRecord, function (info) {
+                var method = (info.getRange || {})[eventName];
+                return method && method(newRecord.controller, event);
+            });
+        });
+    });
 
     return controller;
 }
@@ -78971,18 +79817,6 @@ function cleanStore(store) {
             record.controller.dispose();
             delete store[coordId];
         }
-    });
-}
-
-function onPan(record, dx, dy, oldX, oldY, newX, newY) {
-    wrapAndDispatch(record, function (info) {
-        return info.panGetRange(record.controller, dx, dy, oldX, oldY, newX, newY);
-    });
-}
-
-function onZoom(record, scale, mouseX, mouseY) {
-    wrapAndDispatch(record, function (info) {
-        return info.zoomGetRange(record.controller, scale, mouseX, mouseY);
     });
 }
 
@@ -79101,6 +79935,11 @@ var InsideZoomView = DataZoomView.extend({
                 var coordModel = coordInfo.model;
                 var dataZoomOption = dataZoomModel.option;
 
+                var getRange = {};
+                each$1(['pan', 'zoom', 'scrollMove'], function (eventName) {
+                    getRange[eventName] = bind$5(roamHandlers[eventName], this, coordInfo, coordSysName);
+                }, this);
+
                 register$2(
                     api,
                     {
@@ -79111,13 +79950,13 @@ var InsideZoomView = DataZoomView.extend({
                         },
                         dataZoomId: dataZoomModel.id,
                         throttleRate: dataZoomModel.get('throttle', true),
-                        panGetRange: bind$5(this._onPan, this, coordInfo, coordSysName),
-                        zoomGetRange: bind$5(this._onZoom, this, coordInfo, coordSysName),
+                        getRange: getRange,
                         zoomLock: dataZoomOption.zoomLock,
                         disabled: dataZoomOption.disabled,
                         roamControllerOpt: {
                             zoomOnMouseWheel: dataZoomOption.zoomOnMouseWheel,
                             moveOnMouseMove: dataZoomOption.moveOnMouseMove,
+                            moveOnMouseWheel: dataZoomOption.moveOnMouseWheel,
                             preventDefaultMouseMove: dataZoomOption.preventDefaultMouseMove
                         }
                     }
@@ -79134,12 +79973,16 @@ var InsideZoomView = DataZoomView.extend({
         unregister$1(this.api, this.dataZoomModel.id);
         InsideZoomView.superApply(this, 'dispose', arguments);
         this._range = null;
-    },
+    }
+
+});
+
+var roamHandlers = {
 
     /**
-     * @private
+     * @this {module:echarts/component/dataZoom/InsideZoomView}
      */
-    _onPan: function (coordInfo, coordSysName, controller, dx, dy, oldX, oldY, newX, newY) {
+    zoom: function (coordInfo, coordSysName, controller, e) {
         var lastRange = this._range;
         var range = lastRange.slice();
 
@@ -79150,37 +79993,7 @@ var InsideZoomView = DataZoomView.extend({
         }
 
         var directionInfo = getDirectionInfo[coordSysName](
-            [oldX, oldY], [newX, newY], axisModel, controller, coordInfo
-        );
-
-        var percentDelta = directionInfo.signal
-            * (range[1] - range[0])
-            * directionInfo.pixel / directionInfo.pixelLength;
-
-        sliderMove(percentDelta, range, [0, 100], 'all');
-
-        this._range = range;
-
-        if (lastRange[0] !== range[0] || lastRange[1] !== range[1]) {
-            return range;
-        }
-    },
-
-    /**
-     * @private
-     */
-    _onZoom: function (coordInfo, coordSysName, controller, scale, mouseX, mouseY) {
-        var lastRange = this._range;
-        var range = lastRange.slice();
-
-        // Calculate transform by the first axis.
-        var axisModel = coordInfo.axisModels[0];
-        if (!axisModel) {
-            return;
-        }
-
-        var directionInfo = getDirectionInfo[coordSysName](
-            null, [mouseX, mouseY], axisModel, controller, coordInfo
+            null, [e.originX, e.originY], axisModel, controller, coordInfo
         );
         var percentPoint = (
             directionInfo.signal > 0
@@ -79188,7 +80001,7 @@ var InsideZoomView = DataZoomView.extend({
                 : (directionInfo.pixel - directionInfo.pixelStart)
             ) / directionInfo.pixelLength * (range[1] - range[0]) + range[0];
 
-        scale = Math.max(1 / scale, 0);
+        var scale = Math.max(1 / e.scale, 0);
         range[0] = (range[0] - percentPoint) * scale + percentPoint;
         range[1] = (range[1] - percentPoint) * scale + percentPoint;
 
@@ -79202,9 +80015,53 @@ var InsideZoomView = DataZoomView.extend({
         if (lastRange[0] !== range[0] || lastRange[1] !== range[1]) {
             return range;
         }
-    }
+    },
 
-});
+    /**
+     * @this {module:echarts/component/dataZoom/InsideZoomView}
+     */
+    pan: makeMover(function (range, axisModel, coordInfo, coordSysName, controller, e) {
+        var directionInfo = getDirectionInfo[coordSysName](
+            [e.oldX, e.oldY], [e.newX, e.newY], axisModel, controller, coordInfo
+        );
+
+        return directionInfo.signal
+            * (range[1] - range[0])
+            * directionInfo.pixel / directionInfo.pixelLength;
+    }),
+
+    /**
+     * @this {module:echarts/component/dataZoom/InsideZoomView}
+     */
+    scrollMove: makeMover(function (range, axisModel, coordInfo, coordSysName, controller, e) {
+        return (range[1] - range[0]) * e.scrollDelta;
+    })
+};
+
+function makeMover(getPercentDelta) {
+    return function (coordInfo, coordSysName, controller, e) {
+        var lastRange = this._range;
+        var range = lastRange.slice();
+
+        // Calculate transform by the first axis.
+        var axisModel = coordInfo.axisModels[0];
+        if (!axisModel) {
+            return;
+        }
+
+        var percentDelta = getPercentDelta(
+            range, axisModel, coordInfo, coordSysName, controller, e
+        );
+
+        sliderMove(percentDelta, range, [0, 100], 'all');
+
+        this._range = range;
+
+        if (lastRange[0] !== range[0] || lastRange[1] !== range[1]) {
+            return range;
+        }
+    };
+}
 
 var getDirectionInfo = {
 

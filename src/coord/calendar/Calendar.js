@@ -210,19 +210,25 @@ Calendar.prototype = {
         var week = dayInfo.day;
         var nthWeek = this._getRangeInfo([range.start.time, date]).nthWeek;
 
+        // Trading Custom:
+        // Donot show last column(Saturday) of week
+        if (week === 5) {
+            return [NaN, NaN];
+        } else if (week === 6) {
+            week = 5;
+        }
+
         if (this._orient === 'vertical') {
             return [
                 this._rect.x + week * this._sw + this._sw / 2,
                 this._rect.y + nthWeek * this._sh + this._sh / 2
             ];
-
         }
 
         return [
             this._rect.x + nthWeek * this._sw + this._sw / 2,
             this._rect.y + week * this._sh + this._sh / 2
         ];
-
     },
 
     /**
